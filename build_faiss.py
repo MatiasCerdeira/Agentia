@@ -23,6 +23,12 @@ FAISS_INDEX_FILE = "noticias_politica.index"
 MAPPING_PICKLE_FILE = "mapping_id2chunk.pkl"
 
 
+# Chunking parameters
+MIN_CHARS = 20           # minimum characters to keep a chunk
+MAX_CHARS = 1000         # maximum characters per chunk before splitting
+OVERLAP_CHARS = 200      # overlap characters between subchunks
+
+
 # ---------------------------
 # 2. Funciones de carga de datos
 # ---------------------------
@@ -158,11 +164,11 @@ def guardar_indice_y_mapping(index, documents, index_path, mapping_path):
 
 
 
-# ---------------------------
-# 6. Bloque principal
-# ---------------------------
 
-if __name__ == "__main__":
+def build_faiss_index(use_json=True, ):
+    """
+    Función principal para construir el índice FAISS a partir de artículos de noticias.
+    """
     print("\n🚀 Iniciando proceso de build FAISS para noticias de política...\n")
 
     # 6.1. Cargar artículos
@@ -190,3 +196,9 @@ if __name__ == "__main__":
     guardar_indice_y_mapping(index, documents, FAISS_INDEX_FILE, MAPPING_PICKLE_FILE)
 
     print("\n🎉 ¡Proceso completado! Tenés tu índice FAISS listo para usar. 🎉\n")
+
+
+if __name__ == "__main__":
+    # Ejecutamos la función principal para construir el índice FAISS
+    build_faiss_index(USE_JSON)
+    

@@ -13,7 +13,7 @@ RSS_FEEDS = [
     "https://www.pagina12.com.ar/rss/secciones/el-pais/notas",
 ]
 
-def fetch_all_feeds(feeds):
+def fetch_all_feeds(feeds)->list:
     """
     Recorre cada RSS y devuelve una lista de entradas con:
       - titulo
@@ -21,7 +21,7 @@ def fetch_all_feeds(feeds):
       - fecha (string)
       - description (snippet breve), si existe
     """
-    all_entries = []
+    all_entries:list = []
     for url in feeds:
         feed = feedparser.parse(url)
         for entry in feed.entries:
@@ -32,6 +32,7 @@ def fetch_all_feeds(feeds):
                 # description podría venir como entry.summary o entry.description
                 "snippet": entry.get("summary", entry.get("description", ""))  
             })
+    print(f"🔍 Encontré {len(all_entries)} entradas en total.\n")
     return all_entries
 
 if __name__ == "__main__":

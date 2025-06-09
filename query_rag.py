@@ -89,7 +89,12 @@ def buscar_chunks_faiss(index, documents, modelo, pregunta, top_k=TOP_K):
 # 4. Bloque principal para prueba
 # -----------------------------------
 
-if __name__ == "__main__":
+def run_query(query: str):
+    """
+    Función principal para realizar una consulta RAG (Retrieval-Augmented Generation).
+    Carga el índice FAISS, el mapping de chunks y permite buscar los párrafos más relevantes
+    según una pregunta dada.
+    """
     print("\n🚀 Iniciando consulta RAG...")
 
     # 4.1. Cargar índice FAISS
@@ -106,10 +111,11 @@ if __name__ == "__main__":
     # Podés descomentar la línea con input() si querés un prompt interactivo:
     # pregunta = input("\n✍️  Ingresá tu consulta de política argentina: ")
     # Para probar rápido, definimos una pregunta fija:
-    pregunta = "¿Qué dijeron los medios acerca de la Ley de Educación hoy?"
-
+    if (query==None or query==""):
+        query = "¿Qué es lo más relevante en la política Argentina hoy?"
+    
     # 4.5. Buscar los chunks más relevantes
-    resultados = buscar_chunks_faiss(index, documents, modelo, pregunta, top_k=TOP_K)
+    resultados = buscar_chunks_faiss(index, documents, modelo, query, top_k=TOP_K)
 
     # 4.6. Mostrar en pantalla los resultados encontrados
     print(f"\n🏅 Top {TOP_K} chunks más cercanos a la consulta:\n")
@@ -118,3 +124,8 @@ if __name__ == "__main__":
         print(f"   Distancia: {res['distancia']:.4f}")
         print(f"   Texto: {res['texto'][:200]}...")  # muestro los primeros 200 caracteres
         print()
+
+
+if __name__ == "__main__":
+    # Ejecutar una consulta de prueba
+    run_query("¿Qué es lo más relevante en la política Argentina hoy?")
