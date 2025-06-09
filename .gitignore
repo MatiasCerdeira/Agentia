@@ -1,0 +1,37 @@
+# Carpetas y archivos de entorno virtual
+venv/
+.venv/
+
+# Archivos de sistema que te mete macOS
+.DS_Store
+
+# Archivos compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos de log o caché
+*.log
+*.sqlite3
+*.db
+*.cache
+*.pid
+
+# Archivos generados por el programa
+articulos_txt/
+links.json
+noticias_politica.index
+mapping_id2chunk.pkl
+
+
+# Archivos de Jupyter o notebooks temporales (por si un día te pinta usar)
+.ipynb_checkpoints/
+
+# Archivos de configuración de editores (VSCode, etc)
+.vscode/
+.idea/
+
+# Archivos temporales o de backup
+*.bak
+*.tmp
+*.swp
