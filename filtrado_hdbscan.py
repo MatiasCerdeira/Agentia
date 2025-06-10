@@ -7,6 +7,8 @@ import hdbscan
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from sklearn.preprocessing import normalize
+
 
 
 def cargar_embeddings_y_chunks(faiss_index_file, mapping_pickle_file):
@@ -23,24 +25,51 @@ def cargar_embeddings_y_chunks(faiss_index_file, mapping_pickle_file):
     return embeddings, documentos
 
 
-def ejecutar_hdbscan(embeddings, min_cluster_size=5):
+def ejecutar_hdbscan(embeddings, min_cluster_size=5, min_samples=None):
     """
-    Ejecuta HDBSCAN sobre los embeddings.
+    Ejecuta HDBSCAN sobre embeddings normalizados.
+    Args:
+        embeddings (np.ndarray): Matriz de embeddings (n_samples, n_features)
+        min_cluster_size (int): Tamaño mínimo de cluster
+        min_samples (int): Muestras mínimas para definir densidad (por defecto = min_cluster_size)
+
+    Returns:
+        labels (np.ndarray): Etiquetas de cluster para cada punto (-1 = outlier)
+        clusterer (HDBSCAN): Objeto entrenado para inspección o soft clustering
     """
-    print("🔄 Ejecutando clustering HDBSCAN...")
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric='euclidean')
-    labels = clusterer.fit_predict(embeddings)
-    return labels
+    if min_samples is None:
+        min_samples = min_cluster_size
+
+    # Normalizamos los embeddings para simular distancia coseno
+    embeddings_norm = normalize(embeddings, norm='l2')
+
+    # Reducimos dimensionalidad con PCA (por ejemplo a 50 dimensiones)
+    print("🔻 Reduciendo dimensionalidad con PCA...")
+    pca = PCA(n_components=20)
+    reduced = pca.fit_transform(embeddings_norm)
+
+    # Clustering con HDBSCAN sobre los datos reducidos
+    print("🔄 Ejecutando clustering HDBSCAN sobre datos reducidos con PCA...")
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=3, min_samples=1, metric='euclidean', prediction_data=True)
+    labels = clusterer.fit_predict(reduced)
+
+    return labels, clusterer
 
 
 def asignar_clusters(documentos, labels):
     """
-    Asocia cada etiqueta de cluster a su correspondiente chunk.
+    Asigna el número de cluster a cada documento.
     """
-    for i, doc in enumerate(documentos):
-        doc["cluster"] = int(labels[i])
-    return documentos
+    # Si labels viene como una tupla (ej. (labels, probs)), tomamos solo la primera parte
+    if isinstance(labels, tuple):
+        labels = labels[0]
 
+    # Asegura que sea lista de enteros
+    labels = [int(l) for l in labels]
+
+    for i, doc in enumerate(documentos):
+        doc["cluster"] = labels[i]
+    return documentos
 
 def guardar_clusters(documentos, output_path="documentos_clusterizados_hdbscan.pkl"):
     """
@@ -95,7 +124,7 @@ def clusterizar_noticias_con_hdbscan(
     Función principal para clusterizar noticias con HDBSCAN.
     """
     embeddings, documentos = cargar_embeddings_y_chunks(faiss_index_file, mapping_pickle_file)
-    labels = ejecutar_hdbscan(embeddings, min_cluster_size)
+    labels, clusterer = ejecutar_hdbscan(embeddings, min_cluster_size)
     documentos = asignar_clusters(documentos, labels)
     mostrar_resumen(documentos)
     guardar_clusters(documentos, output_file)

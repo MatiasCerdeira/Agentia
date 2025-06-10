@@ -24,7 +24,7 @@ MAPPING_PICKLE_FILE = "mapping_id2chunk.pkl"
 
 
 # Chunking parameters
-MIN_CHARS = 20           # minimum characters to keep a chunk
+MIN_CHARS = 300           # minimum characters to keep a chunk
 MAX_CHARS = 1000         # maximum characters per chunk before splitting
 OVERLAP_CHARS = 200      # overlap characters between subchunks
 
