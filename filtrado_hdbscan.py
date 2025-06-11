@@ -50,7 +50,7 @@ def ejecutar_hdbscan(embeddings, min_cluster_size=5, min_samples=None):
 
     # Clustering con HDBSCAN sobre los datos reducidos
     print("🔄 Ejecutando clustering HDBSCAN sobre datos reducidos con PCA...")
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=3, min_samples=1, metric='euclidean', prediction_data=True)
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=10, min_samples=1, metric='euclidean', prediction_data=True)
     labels = clusterer.fit_predict(reduced)
 
     return labels, clusterer
