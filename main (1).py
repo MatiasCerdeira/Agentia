@@ -1,6 +1,6 @@
 import fetch_links
 import fetch_full_articles
-import build_faiss
+import Embedder as Embedder
 import query_rag
 import filtrado_hdbscan
 import os
@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     # 3. Construir el índice FAISS
     print("🔄 Construyendo índice FAISS...")
-    build_faiss.build_faiss_index(True)
+    Embedder.build_faiss_index(True)
 
     #4. Realizar prefiltrado con HDBSCAN
     print("FIltrando...")

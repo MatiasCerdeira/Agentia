@@ -1,59 +1,35 @@
 # build_faiss.py
 
-# -----------------------
-# 1. Imports y constantes
-# -----------------------
-
 import os
 import json
+import pickle
 import faiss
 from sentence_transformers import SentenceTransformer
+import numpy as np
 
-# Ruta al JSON que generaste con "fetch_full_articles.py".
-# Asegurate de que el nombre coincida exactamente con tu archivo.
+# Configuración
 INPUT_JSON = "articulos_completos.json"
-
-# Carpeta donde tenés los .txt, en caso quieras usar esos en lugar del JSON.
-# Si preferís leer los .txt en vez del JSON, seteá USE_JSON = False.
 ARTICULOS_TXT_DIR = "articulos_txt"
-USE_JSON = True  # Cambiá a False si querés leer desde los .txt en lugar del JSON
+USE_JSON = True
+FAISS_INDEX_FILE = "indice_articulos.index"
+MAPPING_PICKLE_FILE = "ids_articulos.pkl"
 
-# Nombre de salida para el índice FAISS y el mapping
-FAISS_INDEX_FILE = "noticias_politica.index"
-MAPPING_PICKLE_FILE = "mapping_id2chunk.pkl"
-
-
-# Chunking parameters
-MIN_CHARS = 300           # minimum characters to keep a chunk
-MAX_CHARS = 1000         # maximum characters per chunk before splitting
-OVERLAP_CHARS = 200      # overlap characters between subchunks
-
+MIN_CHARS = 300
+MAX_CHARS = 1000
+OVERLAP_CHARS = 200
 
 # ---------------------------
-# 2. Funciones de carga de datos
+# 1. Carga de datos
 # ---------------------------
 
 def cargar_articulos_desde_json(path_json):
-    """
-    Lee el JSON que contiene la lista de artículos completos.
-    Cada elemento de la lista debe ser un diccionario con al menos la clave "texto".
-    Retorna esa lista de diccionarios.
-    """
     if not os.path.isfile(path_json):
         raise FileNotFoundError(f"No existe el archivo JSON: {path_json}")
     with open(path_json, "r", encoding="utf-8") as f:
         articulos = json.load(f)
     return articulos
 
-
 def cargar_articulos_desde_txt(dir_txt):
-    """
-    Recorre la carpeta dir_txt, lee cada archivo .txt y devuelve
-    una lista de diccionarios con:
-      - "id": el nombre del archivo (sin extensión) como identificador
-      - "texto": todo el contenido del .txt
-    Asume que todos los archivos dentro de dir_txt terminan en .txt.
-    """
     articulos = []
     archivos = sorted(os.listdir(dir_txt))
     for filename in archivos:
@@ -62,40 +38,23 @@ def cargar_articulos_desde_txt(dir_txt):
         ruta = os.path.join(dir_txt, filename)
         with open(ruta, "r", encoding="utf-8") as f:
             texto_completo = f.read()
-        # Usamos el nombre sin la extensión como id
         doc_id = os.path.splitext(filename)[0]
         articulos.append({"id": doc_id, "texto": texto_completo})
     return articulos
 
-
-# -----------------------------------
-# 3. Función para chunkear (por párrafos)
-# -----------------------------------
+# ---------------------------
+# 2. Chunking por párrafos
+# ---------------------------
 
 def chunkear_por_parrafos(articulos):
-    """
-    Toma una lista de artículos (cada uno con al menos 'id' y 'texto'),
-    los divide en párrafos y devuelve una lista de chunks con:
-      - "doc_id": id original del artículo
-      - "chunk_id": identificador único del chunk (por ej. "art_001_p1")
-      - "texto": el texto de ese párrafo
-    Ignora párrafos demasiado cortos (< 50 caracteres).
-    """
     documentos = []
     for art in articulos:
-        # Cada artículo: esperamos que tenga "id" y "texto"
-        doc_id = art.get("id", None)
-        if doc_id is None:
-            # Si el JSON venía con otro campo, podés adaptar aquí
-            # Por simplicidad, si falta "id" usamos un temporal
-            doc_id = f"art_{articulos.index(art):03d}"
+        doc_id = art.get("id", f"art_{articulos.index(art):03d}")
         texto_completo = art.get("texto", "")
-        # Dividimos por doble salto de línea: típico en noticias
         parrafos = texto_completo.split("\n\n")
         for i, parrafo in enumerate(parrafos, start=1):
             parrafo = parrafo.strip()
             if len(parrafo) < 50:
-                # Salteamos párrafos muy cortos (por ejemplo, títulos o frases sueltas)
                 continue
             chunk_id = f"{doc_id}_p{i}"
             documentos.append({
@@ -105,102 +64,72 @@ def chunkear_por_parrafos(articulos):
             })
     return documentos
 
+# ---------------------------
+# 3. Embeddings por artículo
+# ---------------------------
 
-
-# -----------------------------------
-# 4. Generación de embeddings y FAISS
-# -----------------------------------
-
-def crear_indice_faiss_con_contexto(documents, modelo_name="all-mpnet-base-v2", contexto=1):
-    """
-    Crea embeddings para cada chunk, incluyendo contexto (chunks vecinos).
-    """
-    from sentence_transformers import SentenceTransformer
-    import numpy as np
-    import faiss
-
+def crear_indice_faiss_por_articulo(documentos, modelo_name="all-mpnet-base-v2"):
     print("🔄 Cargando modelo de embeddings...")
     modelo = SentenceTransformer(modelo_name)
 
-    print("🔢 Generando embeddings con contexto...")
-    textos_con_contexto = []
-    for i in range(len(documents)):
-        partes = []
-        for j in range(i - contexto, i + contexto + 1):
-            if j < 0 or j >= len(documents):
-                continue
-            partes.append(documents[j]['texto'])
-        texto_completo = " ".join(partes)
-        textos_con_contexto.append(texto_completo)
+    print("🔢 Agrupando chunks por documento...")
+    from collections import defaultdict
+    agrupados = defaultdict(list)
+    for doc in documentos:
+        agrupados[doc["doc_id"]].append(doc["texto"])
 
-    embeddings = modelo.encode(textos_con_contexto, show_progress_bar=True, batch_size=32)
+    textos_articulos = []
+    articulo_ids = []
+    for doc_id, chunks in agrupados.items():
+        texto_completo = " ".join(chunks)
+        textos_articulos.append(texto_completo)
+        articulo_ids.append(doc_id)
+
+    print(f"🧠 Generando embeddings para {len(textos_articulos)} artículos...")
+    embeddings = modelo.encode(textos_articulos, show_progress_bar=True, batch_size=32)
 
     dimension = embeddings.shape[1]
     index = faiss.IndexFlatL2(dimension)
     index.add(embeddings)
 
-    return index, embeddings
+    return index, embeddings, articulo_ids
 
+# ---------------------------
+# 4. Guardado
+# ---------------------------
 
-# -----------------------------------
-# 5. Guardar índice y mapping
-# -----------------------------------
-import pickle  # para serializar la lista de documentos
-
-def guardar_indice_y_mapping(index, documents, index_path, mapping_path):
-    """
-    Guarda el índice FAISS en index_path y la lista 'documents' en mapping_path (con pickle).
-    'documents' es la lista de dicts con 'chunk_id', 'doc_id' y 'texto'.
-    """
-    # 5.1. Guardar índice FAISS
+def guardar_indice_articulos(index, articulo_ids, index_path, ids_path):
     print(f"💾 Guardando índice FAISS en '{index_path}'...")
     faiss.write_index(index, index_path)
+    print(f"💾 Guardando mapping de IDs en '{ids_path}'...")
+    with open(ids_path, "wb") as f:
+        pickle.dump(articulo_ids, f)
+    print("✅ Guardado completo.")
 
-    # 5.2. Guardar mapping (documentos) en pickle
-    print(f"💾 Guardando mapping (lista de chunks) en '{mapping_path}'...")
-    with open(mapping_path, "wb") as f:
-        pickle.dump(documents, f)
+# ---------------------------
+# 5. Ejecución principal
+# ---------------------------
 
-    print("✅ Índice y mapping guardados con éxito.")
-
-
-
-
-
-def build_faiss_index(use_json=True, ):
-    """
-    Función principal para construir el índice FAISS a partir de artículos de noticias.
-    """
+def build_faiss_index(use_json=True):
     print("\n🚀 Iniciando proceso de build FAISS para noticias de política...\n")
 
-    # 6.1. Cargar artículos
-    if USE_JSON:
+    if use_json:
         print("🔍 Cargando artículos desde JSON...")
         articulos = cargar_articulos_desde_json(INPUT_JSON)
-        # Esperamos que cada 'articulo' sea {"id": "...", "texto": "...", ...}
-        # Si el JSON tiene otros campos (ej. "titulo", "link"), no los usamos aquí.
     else:
-        print("🔍 Cargando artículos desde carpeta de .txt...")
+        print("🔍 Cargando artículos desde TXT...")
         articulos = cargar_articulos_desde_txt(ARTICULOS_TXT_DIR)
-        # Aquí cada 'articulo' es {"id": "<nombre_sin_ext>", "texto": "<contenido>"}
 
-    print(f"   • Cantidad de artículos cargados: {len(articulos)}")
+    print(f"   • Artículos cargados: {len(articulos)}")
 
-    # 6.2. Dividir en chunks (párrafos)
-    print("✂️ Dividiendo artículos en chunks (párrafos)...")
-    documents = chunkear_por_parrafos(articulos)
-    print(f"   • Total de chunks generados: {len(documents)}")
+    print("✂️ Chunking por párrafos...")
+    documentos = chunkear_por_parrafos(articulos)
+    print(f"   • Total de chunks: {len(documentos)}")
 
-    # 6.3. Generar embeddings y crear índice FAISS
-    index, embeddings = crear_indice_faiss_con_contexto(documents)
+    index, embeddings, articulo_ids = crear_indice_faiss_por_articulo(documentos)
+    guardar_indice_articulos(index, articulo_ids, FAISS_INDEX_FILE, MAPPING_PICKLE_FILE)
 
-    # 6.4. Guardar índice y mapping
-    guardar_indice_y_mapping(index, documents, FAISS_INDEX_FILE, MAPPING_PICKLE_FILE)
-
-    print("\n🎉 ¡Proceso completado! Tenés tu índice FAISS listo para usar. 🎉\n")
-
+    print("\n🎉 Proceso finalizado: índice de artículos generado.\n")
 
 if __name__ == "__main__":
-    # Ejecutamos la función principal para construir el índice FAISS
     build_faiss_index(USE_JSON)
-    

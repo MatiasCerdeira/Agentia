@@ -1,131 +1,78 @@
-# query_rag.py
+# reconstruir_noticias_rag.py
 
-# -----------------------
-# 1. Imports y constantes
-# -----------------------
-
-import os
 import pickle
+import json
 import faiss
+import numpy as np
 from sentence_transformers import SentenceTransformer
+from transformers import pipeline
+from tqdm import tqdm
 
-# Nombres de los archivos que generamos en el paso anterior
-FAISS_INDEX_FILE = "noticias_politica.index"
-MAPPING_PICKLE_FILE = "mapping_id2chunk.pkl"
+# Cargar textos reales de los artículos
+with open("articulos_completos.json", "r", encoding="utf-8") as f:
+    articulos = json.load(f)
 
-# Cantidad de vecinos a recuperar (podés ajustar según tus pruebas)
-TOP_K = 10
+# Crear diccionario para lookup rápido por ID
+texto_por_id = {art["id"]: art["texto"] for art in articulos}
+# Archivos requeridos
+FAISS_INDEX_FILE = "indice_articulos.index"
+MAPPING_PICKLE_FILE = "ids_articulos.pkl"
+OUTPUT_FILE = "noticias_reconstruidas_clasificadas.json"
 
-# Modelo de embeddings (mismo que usamos para construir el índice)
-EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+# Paso 1: Cargar índice FAISS e IDs
+print("📥 Cargando índice FAISS e IDs de artículos...")
+index = faiss.read_index(FAISS_INDEX_FILE)
 
-# -----------------------------------
-# 2. Funciones de carga: índice + mapping
-# -----------------------------------
+with open(MAPPING_PICKLE_FILE, "rb") as f:
+    articulo_ids = pickle.load(f)
 
-def cargar_indice(index_path):
-    """
-    Lee el índice FAISS desde disco.
-    """
-    if not os.path.isfile(index_path):
-        raise FileNotFoundError(f"No existe el índice en: {index_path}")
-    print(f"🔍 Cargando índice FAISS desde '{index_path}'...")
-    index = faiss.read_index(index_path)
-    return index
+# Paso 2: Cargar modelo de embeddings
+print("🔄 Cargando modelo de embeddings...")
+modelo_emb = SentenceTransformer("all-mpnet-base-v2")
 
-def cargar_mapping(mapping_path):
-    """
-    Carga la lista de documentos (mapping) desde el pickle.
-    Cada elemento es un dict con 'doc_id', 'chunk_id' y 'texto'.
-    """
-    if not os.path.isfile(mapping_path):
-        raise FileNotFoundError(f"No existe el mapping en: {mapping_path}")
-    print(f"🔍 Cargando mapping (lista de chunks) desde '{mapping_path}'...")
-    with open(mapping_path, "rb") as f:
-        documents = pickle.load(f)
-    return documents
+# Paso 3: Cargar modelo para clasificación de importancia
+print("🧠 Cargando modelo de clasificación de importancia...")
+modelo_clasificacion = pipeline("text-classification", model="cross-encoder/nli-deberta-v3-base")
 
-# -----------------------------------
-# 3. Función para hacer query en FAISS
-# -----------------------------------
+# Paso 4: Recuperar y reconstruir noticias agrupadas
+print("🔎 Realizando recuperación y reconstrucción estilo RAG...")
+reconstruidas = []
 
-def buscar_chunks_faiss(index, documents, modelo, pregunta, top_k=TOP_K):
-    """
-    1. Genera el embedding de la 'pregunta'.
-    2. Busca los top_k vecinos más cercanos en 'index'.
-    3. Devuelve una lista de dicts con:
-       - 'chunk_id'
-       - 'doc_id'
-       - 'texto' (párrafo completo)
-       - 'distancia' (valor retornado por FAISS)
-    """
-    # 3.1. Vectorizar la pregunta
-    print(f"\n🔎 Vectorizando la consulta: \"{pregunta}\"")
-    embedding_query = modelo.encode([pregunta])  # devuelve shape (1, dim)
+for i, doc_id in enumerate(tqdm(articulo_ids)):
+    # Obtener embedding del artículo
+    vector = index.reconstruct(i).reshape(1, -1)
 
-    # 3.2. Realizar la búsqueda en FAISS
-    # index.search recibe (array_de_queries, k) y devuelve (distancias, índices)
-    distancias, indices = index.search(embedding_query, top_k)
-    distancias = distancias[0]  # porque solo pasamos 1 consulta
-    indices = indices[0]
+    # Buscar los 5 artículos más similares (incluido él mismo)
+    D, I = index.search(vector, k=5)
 
-    resultados = []
-    for i, idx in enumerate(indices):
-        # Si idx = -1 puede significar que no hay más vectores; pero con IndexFlatL2 
-        # normalmente no pasa si top_k < total de vectores
-        if idx < 0 or idx >= len(documents):
-            continue
-        doc = documents[idx]
-        resultados.append({
-            "chunk_id": doc["chunk_id"],
-            "doc_id": doc["doc_id"],
-            "texto": doc["texto"],
-            "distancia": float(distancias[i])
-        })
+    # Evitar duplicados, unir los textos más cercanos
+    ids_similares = list(set([articulo_ids[j] for j in I[0]]))
 
-    return resultados
+    textos = [texto_por_id.get(doc_id, "") for doc_id in ids_similares]
+    texto_completo = "\n\n".join(textos)
+    reconstruidas.append({
+        "grupo_id": i,
+        "ids_incluidos": ids_similares,
+        "texto_reconstruido": texto_completo
+    })
 
-# -----------------------------------
-# 4. Bloque principal para prueba
-# -----------------------------------
+# Paso 5: Clasificar importancia
+print("📊 Clasificando importancia de los grupos...")
+for grupo in tqdm(reconstruidas):
+    resumen = grupo["texto_reconstruido"][:512]
+    try:
+        pred = modelo_clasificacion(resumen)[0]
+        grupo["importancia"] = pred["label"]
+        grupo["confianza"] = round(pred["score"], 3)
+    except Exception as e:
+        grupo["importancia"] = "Desconocido"
+        grupo["confianza"] = 0.0
+        grupo["error"] = str(e)
 
-def run_query(query: str):
-    """
-    Función principal para realizar una consulta RAG (Retrieval-Augmented Generation).
-    Carga el índice FAISS, el mapping de chunks y permite buscar los párrafos más relevantes
-    según una pregunta dada.
-    """
-    print("\n🚀 Iniciando consulta RAG...")
+# Paso 6: Guardar
+import json
+print(f"💾 Guardando resultados en {OUTPUT_FILE}...")
+with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    json.dump(reconstruidas, f, indent=2, ensure_ascii=False)
 
-    # 4.1. Cargar índice FAISS
-    index = cargar_indice(FAISS_INDEX_FILE)
-
-    # 4.2. Cargar mapping (lista de chunks)
-    documents = cargar_mapping(MAPPING_PICKLE_FILE)
-
-    # 4.3. Cargar modelo de embeddings (mismo que en build)
-    print("🔄 Cargando modelo de embeddings para query...")
-    modelo = SentenceTransformer(EMBEDDING_MODEL_NAME)
-
-    # 4.4. Pedirle al usuario una pregunta (o definirla fijo para la prueba)
-    # Podés descomentar la línea con input() si querés un prompt interactivo:
-    # pregunta = input("\n✍️  Ingresá tu consulta de política argentina: ")
-    # Para probar rápido, definimos una pregunta fija:
-    if (query==None or query==""):
-        query = "¿Qué es lo más relevante en la política Argentina hoy?"
-    
-    # 4.5. Buscar los chunks más relevantes
-    resultados = buscar_chunks_faiss(index, documents, modelo, query, top_k=TOP_K)
-
-    # 4.6. Mostrar en pantalla los resultados encontrados
-    print(f"\n🏅 Top {TOP_K} chunks más cercanos a la consulta:\n")
-    for i, res in enumerate(resultados, start=1):
-        print(f"{i}. [doc_id: {res['doc_id']}, chunk_id: {res['chunk_id']} ]")
-        print(f"   Distancia: {res['distancia']:.4f}")
-        print(f"   Texto: {res['texto'][:200]}...")  # muestro los primeros 200 caracteres
-        print()
-
-
-if __name__ == "__main__":
-    # Ejecutar una consulta de prueba
-    run_query("¿Qué es lo más relevante en la política Argentina hoy?")
+print("✅ Proceso completado. Noticias reconstruidas y clasificadas.")
