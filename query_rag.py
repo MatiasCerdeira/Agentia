@@ -1,78 +1,80 @@
-# reconstruir_noticias_rag.py
+# query_rag.py
 
-import pickle
 import json
+import pickle
+from collections import defaultdict
+
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 from tqdm import tqdm
 
-# Cargar textos reales de los artículos
-with open("articulos_completos.json", "r", encoding="utf-8") as f:
-    articulos = json.load(f)
 
-# Crear diccionario para lookup rápido por ID
-texto_por_id = {art["id"]: art["texto"] for art in articulos}
-# Archivos requeridos
-FAISS_INDEX_FILE = "indice_articulos.index"
-MAPPING_PICKLE_FILE = "ids_articulos.pkl"
-OUTPUT_FILE = "noticias_reconstruidas_clasificadas.json"
+def reconstruir_noticias_y_clasificar(
+    json_articulos_path="articulos_completos.json",
+    clustering_pkl_path="articulos_clusterizados.pkl",
+    output_file="noticias_reconstruidas_clasificadas.json",
+    modelo_clasificacion_name="cross-encoder/nli-deberta-v3-base",
+    truncar_a=512
+):
+    """
+    Reconstruye noticias por cluster y las clasifica según importancia.
+    Parámetros:
+        json_articulos_path: str - Ruta al archivo JSON con artículos originales.
+        clustering_pkl_path: str - Ruta al archivo .pkl con IDs de artículos y su cluster.
+        output_file: str - Ruta de salida para guardar el JSON con reconstrucciones.
+        modelo_clasificacion_name: str - Modelo HuggingFace para clasificación de importancia.
+        truncar_a: int - Cantidad máxima de caracteres usados para clasificar.
+    """
+    print("📥 Cargando artículos originales y resultados de clustering...")
+    with open(json_articulos_path, "r", encoding="utf-8") as f:
+        articulos = json.load(f)
+    with open(clustering_pkl_path, "rb") as f:
+        clustering = pickle.load(f)
 
-# Paso 1: Cargar índice FAISS e IDs
-print("📥 Cargando índice FAISS e IDs de artículos...")
-index = faiss.read_index(FAISS_INDEX_FILE)
+    texto_por_id = {a["id"]: a["texto"] for a in articulos}
+    cluster_por_id = {x["id"]: x["cluster"] for x in clustering}
 
-with open(MAPPING_PICKLE_FILE, "rb") as f:
-    articulo_ids = pickle.load(f)
+    print("🗂️ Agrupando artículos por cluster...")
+    grupos = defaultdict(list)
+    for art_id, cluster_id in cluster_por_id.items():
+        grupos[cluster_id].append(art_id)
 
-# Paso 2: Cargar modelo de embeddings
-print("🔄 Cargando modelo de embeddings...")
-modelo_emb = SentenceTransformer("all-mpnet-base-v2")
+    print("🧠 Cargando modelo de clasificación de importancia...")
+    modelo_clasificacion = pipeline("text-classification", model=modelo_clasificacion_name)
 
-# Paso 3: Cargar modelo para clasificación de importancia
-print("🧠 Cargando modelo de clasificación de importancia...")
-modelo_clasificacion = pipeline("text-classification", model="cross-encoder/nli-deberta-v3-base")
+    print("🔎 Reconstruyendo textos estilo RAG y clasificando...")
+    resultados = []
 
-# Paso 4: Recuperar y reconstruir noticias agrupadas
-print("🔎 Realizando recuperación y reconstrucción estilo RAG...")
-reconstruidas = []
+    for cluster_id, ids in tqdm(grupos.items()):
+        textos = [texto_por_id.get(doc_id, "") for doc_id in ids]
+        texto_reconstruido = "\n\n".join(textos)
+        resumen = texto_reconstruido[:truncar_a]
+        try:
+            pred = modelo_clasificacion(resumen)[0]
+            importancia = pred["label"]
+            confianza = round(pred["score"], 3)
+        except Exception as e:
+            importancia = "Desconocido"
+            confianza = 0.0
+            pred = {"error": str(e)}
 
-for i, doc_id in enumerate(tqdm(articulo_ids)):
-    # Obtener embedding del artículo
-    vector = index.reconstruct(i).reshape(1, -1)
+        resultados.append({
+            "cluster_id": int(cluster_id),
+            "articulos_incluidos": ids,
+            "texto_reconstruido": texto_reconstruido,
+            "importancia": importancia,
+            "confianza": confianza
+        })
 
-    # Buscar los 5 artículos más similares (incluido él mismo)
-    D, I = index.search(vector, k=5)
+    print(f"💾 Guardando resultados en '{output_file}'...")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(resultados, f, indent=2, ensure_ascii=False)
 
-    # Evitar duplicados, unir los textos más cercanos
-    ids_similares = list(set([articulo_ids[j] for j in I[0]]))
+    print("✅ Proceso finalizado: noticias reconstruidas y clasificadas.")
+    return resultados
 
-    textos = [texto_por_id.get(doc_id, "") for doc_id in ids_similares]
-    texto_completo = "\n\n".join(textos)
-    reconstruidas.append({
-        "grupo_id": i,
-        "ids_incluidos": ids_similares,
-        "texto_reconstruido": texto_completo
-    })
 
-# Paso 5: Clasificar importancia
-print("📊 Clasificando importancia de los grupos...")
-for grupo in tqdm(reconstruidas):
-    resumen = grupo["texto_reconstruido"][:512]
-    try:
-        pred = modelo_clasificacion(resumen)[0]
-        grupo["importancia"] = pred["label"]
-        grupo["confianza"] = round(pred["score"], 3)
-    except Exception as e:
-        grupo["importancia"] = "Desconocido"
-        grupo["confianza"] = 0.0
-        grupo["error"] = str(e)
-
-# Paso 6: Guardar
-import json
-print(f"💾 Guardando resultados en {OUTPUT_FILE}...")
-with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-    json.dump(reconstruidas, f, indent=2, ensure_ascii=False)
-
-print("✅ Proceso completado. Noticias reconstruidas y clasificadas.")
+if __name__ == "__main__":
+    reconstruir_noticias_y_clasificar()

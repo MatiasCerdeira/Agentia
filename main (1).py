@@ -36,10 +36,10 @@ if __name__ == "__main__":
 
     #4. Realizar prefiltrado con HDBSCAN
     print("FIltrando...")
-    filtrado_hdbscan.clusterizar_noticias_con_hdbscan()
+    filtrado_hdbscan.clusterizar_articulos_hdbscan()
 
     # 5. Realizar una consulta RAG
     print("🔄 Realizando consulta RAG...")
-    query_rag.run_query("¿Qué es lo más relevante en la política Argentina hoy?")
+    query_rag.reconstruir_noticias_y_clasificar()
 
 
